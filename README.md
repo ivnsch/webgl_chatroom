@@ -12,7 +12,7 @@ WebGL Beginner's Guide [Paperback] from Diego Cantor, chapter 8. The code can be
 
 
 
-[Video](http://www.youtube.com/watch?v=lg5APtONSSU&feature=youtu.be)
+[Video](http://www.youtube.com/watch?v=Yv56fd6-lbA)
 
 
 This is an unfinished exercise, meant to be taken "as is". Modify and use whereever you want.

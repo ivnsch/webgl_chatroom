@@ -3,7 +3,7 @@ webgl_chatroom
 
 Basic chat functionality, using websockets, in 3D scene
 
-![ScreenShot](https://raw.github.com/i-schuetz/webgl_drawing/master/screen_chat.png)
+![ScreenShot](https://raw.github.com/i-schuetz/webgl_chatroom/master/screen_chat.png)
 
 Works in WebGL compatible browsers.
 

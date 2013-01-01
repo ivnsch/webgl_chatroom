@@ -1,0 +1,964 @@
+<!--
+
+webgl_chat author Ivan Schütz (ivanschuetz(at)gmail.com)
+
+The underlying code to build the WebGL scene, and the picking mechanism was taken from the book
+WebGL Beginner's Guide [Paperback] from Diego Cantor, chapter 8. The code can be found at: https://bitbucket.org/dcantor/webgl-beginners-guide-code/src
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+http://www.apache.org/licenses/LICENSE-2.0
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.-->
+<html>
+
+<head>
+<title>WebGL chat</title>
+<meta http-equiv='content-type' content='text/html; charset=ISO-8859-1'>
+
+<!-- CSS Styles //-->
+<link href='css/styles.css'   type='text/css' rel='stylesheet'>
+<link href='css/prettify_desert.css'  type='text/css' rel='stylesheet'/>
+<link href='css/colorpicker.css'  type='text/css' rel='stylesheet'/>
+
+<link href='css/smoothness/jquery-ui-1.8.13.custom.css' type='text/css' rel='stylesheet' />
+<!-- GUI Libraries //-->
+<script type='text/javascript' src='js/gui/jquery-1.5.1.min.js'></script>
+<script type='text/javascript' src='js/gui/jquery-ui-1.8.13.custom.min.js'></script> 
+<script type='text/javascript' src='js/gui/colorpicker.js'></script>
+<script type='text/javascript' src='js/gui/prettify.js'></script>
+<script type='text/javascript' src='js/gui/codeview.js'></script>
+<!-- MATH Libraries //-->
+<script type='text/javascript' src='js/math/gl-matrix-min.js'></script>
+<!-- WEBGL Libraries //-->
+<script type='text/javascript' src='js/webgl/Globals.js'></script>
+<script type='text/javascript' src='js/webgl/Utils.js'></script>
+<script type='text/javascript' src='js/webgl/Program.js'></script>
+<script type='text/javascript' src='js/webgl/Scene.js'></script>
+<script type='text/javascript' src='js/webgl/Axis.js'></script>
+<script type='text/javascript' src='js/webgl/Floor.js'></script>
+<script type='text/javascript' src='js/webgl/Camera.js'></script>
+<script type='text/javascript' src='js/webgl/CameraInteractor.js'></script>
+<script type='text/javascript' src='js/webgl/SceneTransforms.js'></script>
+<script type='text/javascript' src='js/webgl/Texture.js'></script>
+<script type='text/javascript' src='js/webgl/WebGLApp.js'></script>
+<script type='text/javascript' src='js/webgl/Picker.js'></script>
+
+<script id="shader-vs" type="x-shader/x-vertex">
+
+attribute vec3 aVertexPosition;
+attribute vec3 aVertexNormal;
+attribute vec4 aVertexColor;
+attribute vec2 aVertexTextureCoords;
+
+uniform mat4 uMVMatrix;
+uniform mat4 uPMatrix;
+uniform mat4 uNMatrix;
+uniform vec3 uLightPosition;
+uniform vec4 uMaterialDiffuse;
+uniform bool uWireframe;
+uniform bool uUseVertexColor;
+uniform bool uUseTextures;
+
+varying vec3 vNormal;
+varying vec3 vLightRay;
+varying vec3 vEyeVec;
+varying vec4 vFinalColor;
+varying vec2 vTextureCoord;
+
+void main(void) {
+    
+ vFinalColor = uMaterialDiffuse;
+ vTextureCoord = vec2(0.0);
+
+ if (uUseVertexColor){
+    vFinalColor = aVertexColor;
+ }
+ 
+ if (uUseTextures){
+    vTextureCoord = aVertexTextureCoords;
+ }
+
+ vec4 vertex = uMVMatrix * vec4(aVertexPosition, 1.0);
+ vNormal = vec3(uNMatrix * vec4(aVertexNormal, 1.0));
+ vec4 light = vec4(uLightPosition,1.0);
+ vLightRay = vertex.xyz-light.xyz;
+ vEyeVec = -vec3(vertex.xyz);
+ 
+ gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+ 
+}	
+</script>
+
+<script id="shader-fs" type="x-shader/x-fragment">
+#ifdef GL_ES
+precision highp float;
+#endif
+
+uniform bool uWireframe;
+uniform bool uNoLights;
+uniform bool uUseTextures; 
+
+uniform vec4 uLightAmbient;
+uniform vec4 uLightDiffuse;
+uniform vec4 uMaterialAmbient;
+uniform vec4 uMaterialDiffuse;
+uniform bool uOffscreen;  
+
+uniform sampler2D uSampler;  
+
+varying vec3 vNormal; 
+varying vec3 vLightRay;
+varying vec3 vEyeVec;
+varying vec4 vFinalColor;
+varying vec2 vTextureCoord;
+
+void main(void)
+{
+    if(uOffscreen){
+        gl_FragColor = uMaterialDiffuse;
+        return;
+    }
+    
+    if(uWireframe){
+        gl_FragColor = vFinalColor;
+    }
+    else{
+        //ambient term
+        vec4 Ia = uLightAmbient * uMaterialAmbient;
+        
+        //diffuse term
+        vec3 L = normalize(vLightRay);
+        vec3 N = normalize(vNormal);
+        float lambertTerm = max(dot(N,-L),0.33);
+        vec4 Id = uLightDiffuse * uMaterialDiffuse * lambertTerm; 
+        
+        //specular term
+        vec3 E = normalize(vEyeVec);
+        vec3 R = reflect(L, N);
+        float specular = pow( max(dot(R, E), 0.5), 50.0);
+        vec4 Is = vec4(0.5) * specular;
+
+        //result
+        vec4 finalColor = Ia + Id + Is;
+        
+        if (uMaterialDiffuse.a != 1.0) {   
+            finalColor.a = uMaterialDiffuse.a; 
+        }
+        else {
+            finalColor.a = 1.0;
+        }
+       
+        if (uUseTextures){
+			if (uNoLights) {
+    	        gl_FragColor =  texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+		
+			} else {
+	            gl_FragColor =  finalColor * texture2D(uSampler, vec2(vTextureCoord.s, vTextureCoord.t));
+			}
+        }
+        else{
+            gl_FragColor = finalColor;
+        }
+    }
+
+}
+</script>
+
+<!-- websockets part --------------------------------------------------------------------------------------------------------->
+<script>
+
+var useSockets = true;
+
+var enterCount = 0;
+
+if (window.MozWebSocket) {
+  window.WebSocket = window.MozWebSocket;
+}
+
+var conn;
+var myId;
+
+var cubeIndexTmp = 0;
+
+	function openConnection() {
+	  // uses global 'conn' object
+	  if (conn === undefined || conn.readyState === undefined || conn.readyState > 1) {
+		conn = new WebSocket('ws://localhost:9999');    
+		conn.onopen = function () {
+// 		  state.className = 'success';
+// 		  state.innerHTML = 'Socket open';
+		};
+
+		conn.onmessage = function (event) {
+		   console.log(event.data);
+		  var message = event.data; //JSON.parse(event.data);
+		  
+		  var firstIndex = message.indexOf(" ");
+		  var type = message.substring(0, firstIndex);
+		  var body = message.substring(firstIndex + 1, message.length);
+		  
+		  //console.log("type: #" + type + "#");
+		  //console.log("body: #" + body + "#");
+		  
+		  //TODO block actions until id assigned
+		  if (type == "conn") {
+			  myId = parseInt(body);
+			  //console.log("received id: " + myId);
+			  runWebGLApp();
+		  }
+		  else if (type == "players") {
+			  var allPlayersStrArr = body.split("#");
+
+			  //console.log("body: " + body);
+			  //console.log("allPlayersStrArr: " + allPlayersStrArr);
+
+			  
+			  
+			  for (var index in allPlayersStrArr) {
+					var playerStr = allPlayersStrArr[index]; 
+				    //console.log("checking this players str: " + playerStr);
+				  	var parts = playerStr.split(" ");
+				  	var id = parseInt(parts[0]);
+
+				  	//console.log("the id: " + id);
+// 				  	body: #0 notusedname -7.0 1.0 0.0#1 notusedname 0.0 1.0 0.0## 
+				  	
+					if (id != myId) { //first id check because # at the end causes "one more player"
+					  	var name = parts[1];
+					  	var x = parseInt(parts[2]);
+					  	var y = parseInt(parts[3]);
+					  	var z = parseInt(parts[4]);
+					  	//console.log("players adding object! id: " + id + " myId: " + myId);
+					    Scene.loadObject('models/geometry/texCube.json', id, {position:[x, y, z], scale:[2,2,2], ambient:[0.4,0.4,0.4,1.0]});
+					}					  	
+			  }
+		  }
+		  else if (type == "addPlayer") {
+			  	var parts = body.split(" ");
+			  	var id = parseInt(parts[0]);
+				
+			  	if (id != myId) {
+				  	var name = parts[1];
+				  	var x = parseInt(parts[2]);
+				  	var y = parseInt(parts[3]);
+				  	var z = parseInt(parts[4]);
+				  	//console.log("addPlayer adding object! id: " + id + " myId: " + myId);
+				    Scene.loadObject('models/geometry/texCube.json', id, {position:[x, y, z], scale:[2,2,2], ambient:[0.4,0.4,0.4,1.0]});
+			  	}  
+		  }
+		  else if (type == "chat") {
+			  var firstIndex = body.indexOf(" ");
+
+			  var id = body.substring(0, firstIndex);
+			  var msg = body.substring(firstIndex + 1, body.length);
+			  
+			  processMessage(id, msg);
+		  
+		  } else if (type == "move") {
+			  	var parts = body.split(" ");
+			  	var id = parseInt(parts[0]);
+				
+			  	var x = parseInt(parts[1]);
+			  	var y = parseInt(parts[2]);
+			  	var z = parseInt(parts[3]);
+
+// 			  if (id != myId) {
+				  processMove(id, x, y, z);
+// 			  }
+		  }
+// 		  if (!(/^\d+$/).test(message)) {
+// 			log.innerHTML = '<li class="them">' + message.replace(/[<>&]/g, function (m) { return entities[m]; }) + '</li>' + log.innerHTML;
+// 		  } else {
+// 			connected.innerHTML = message;
+// 		  }
+
+		};
+		
+		conn.onclose = function (event) {
+// 		  state.className = 'fail';
+// 		  state.innerHTML = 'Socket closed';
+		};
+	  }
+	}
+
+
+if (useSockets) {
+  openConnection();  
+}
+// }
+</script>
+<!-- websockets part --------------------------------------------------------------------------------------------------------->
+
+<script>
+
+	
+var posx = 0;
+var posy = 1;
+var posz = 0;
+var velocity;
+var targetx;
+var targetz;
+var path = [];
+
+
+function go() {
+	if (selectedObject) {
+		selectedObject.position[0] = parseFloat(document.getElementById('positionx').value);
+		selectedObject.position[2] = parseFloat(document.getElementById('positionz').value);
+	}
+}
+
+
+function lineDistance(p1, p2) {
+  var c1 = p2.x - p1.x;
+  c1 *=  c1;
+  var c2 = p2.y - p1.y;
+  c2 *= c2;
+  return Math.sqrt(c1 + c2);
+}
+
+function getLinearPath(p1, p2, speed) {
+	var path = new Array();
+	var vector = {x: p2.x - p1.x, y: p2.y - p1.y};
+	var vectorBetrag = lineDistance(p1, p2);
+	var evector = {x: vector.x / vectorBetrag, y: vector.y / vectorBetrag};
+	
+	var i = 1;
+	var betrag = i * speed;
+	var partVector;
+	while (betrag < vectorBetrag) {
+		partVector = {x: evector.x * betrag + p1.x, y: evector.y * betrag + p1.y};
+		console.log("push:" + partVector.x + ", " + partVector.y);
+		path.push(partVector);
+		betrag = ++i * speed;
+	}
+	path.push(p2);
+	return path;
+}
+
+function move() {
+	if (selectedObject) {
+		velocity = parseFloat(document.getElementById('vel').value);
+		targetx = parseFloat(document.getElementById('targetx').value);
+		targetz = parseFloat(document.getElementById('targetz').value);
+		
+		path = getLinearPath({x: selectedObject.position[0], y: selectedObject.position[2]}, {x: targetx, y: targetz}, velocity);
+	}
+}
+
+</script>
+
+<script id='code-js' type="text/javascript">
+
+
+var camera 		= null;
+var interactor 	= null;
+var picker 		= null;
+var transforms	= null;
+var showPickingImage 	= false;
+
+var context2Db;
+
+var veloocity = 1;
+
+function keyCallback(key) {
+	var pos = selectedObject.position;
+	
+	if (key == 38 || key == 40 || key == 37 || key == 39) {
+		
+		if (key == 38){
+
+			pos[2] -= veloocity;
+		}
+		else if (key == 40){
+
+			pos[2] += veloocity;
+		}
+		else if (key == 37){
+
+			pos[0] -= veloocity;
+		}
+		else if (key == 39){
+
+			pos[0] += veloocity;
+		}
+		
+		conn.send("move " + myId + " " + pos[0] + " " + pos[1] + " " + pos[2]);
+	}
+}
+
+function configure(){
+    gl.clearColor(0.3,0.3,0.3, 1.0);
+    gl.clearDepth(1.0);
+    
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+
+    
+    //Creates and sets up the camera location
+    camera = new Camera(CAMERA_ORBITING_TYPE);
+    camera.goHome([0,0,40]);
+    camera.setFocus([0.0,0.0,0.0]);
+    camera.setElevation(-30);
+    camera.setAzimuth(0);
+    camera.hookRenderer = render;
+    
+    
+    var canvas  = document.getElementById('canvas-element-id');
+    
+	context2Db = document.getElementById('textCanvas2').getContext('2d');
+
+	setUpTextArea();
+        
+// 	for (var ii = 0; ii< 6; ++ii){
+		writeTextToCanvas('Hello!'/* , ii */);
+// 	}
+		
+    //Scene Picker
+    picker = new Picker(canvas);
+    picker.processHitsCallback = processHits;
+    picker.addHitCallback      = addHit;
+    picker.removeHitCallback   = removeHit;
+    picker.hitPropertyCallback = hitProperty;
+    picker.moveCallback        = movePickedObjects;
+    
+    //Creates and sets up the mouse and keyboard interactor
+    interactor = new CameraInteractor(camera, canvas);
+    interactor.setPicker(picker);
+    interactor.setPicker(picker);
+        
+    //Scene Transforms
+    transforms = new SceneTransforms(camera);
+   
+    //init transforms
+    transforms.init();
+    
+    //Program
+    attributeList = ["aVertexPosition",
+                    "aVertexNormal",
+                    "aVertexColor",
+                    "aVertexTextureCoords"];
+
+    uniformList = [	"uPMatrix", 
+                    "uMVMatrix", 
+                    "uNMatrix",
+                    "uMaterialDiffuse",
+                    "uMaterialAmbient",
+                    "uLightAmbient",
+                    "uLightDiffuse",
+                    "uLightPosition",
+                    "uWireframe",
+                    "uNoLights",
+                    "uAlpha",
+                    "uUseVertexColor",
+                    "uOffscreen",
+                    "uSampler",
+                    "uUseTextures"
+                    ];
+    
+    
+    Program.load(attributeList, uniformList);
+    
+    gl.uniform3fv(Program.uLightPosition,   [0,5,20]);
+    gl.uniform4fv(Program.uLightAmbient,    [0.0,0.0,0.0,1.0]);
+    gl.uniform4fv(Program.uLightDiffuse,    [1.0,1.0,1.0,1.0]);
+    gl.uniform1f(Program.uAlpha, 1.0);
+}
+
+var faceColors = ['rgba(0, 0, 255, 255)', 'rgba(255, 0, 0, 255)',
+                       'rgba(0, 255, 0, 255)', 'rgba(0, 0, 0, 255)',
+                       'rgba(255, 0, 255, 255)', 'rgba(0, 255, 255, 255)'];
+				
+var textCanvasW = 256;
+
+   function setUpTextArea(){
+      context2Db.font = 'normal 50px Verdana';
+      context2Db.fillStyle = 'rgba(155,0,0,255)';
+      context2Db.fillRect(0,0, textCanvasW, textCanvasW);
+      context2Db.lineWidth = 5;
+      context2Db.strokeStyle = 'rgba(0,0,0,255)';
+      context2Db.textAlign = 'center';
+      context2Db.textBaseline = 'middle';
+  }
+				
+				
+function writeTextToCanvas(text/* , idx */){
+	context2Db.save();
+
+	context2Db.clearRect (0 , 0 , textCanvasW , textCanvasW);
+	context2Db.fillStyle = 'rgba(170,170,255,255)';
+	context2Db.fillRect(0,0, textCanvasW, textCanvasW);
+	
+	context2Db.font = 'italic 65px Calibri';
+	context2Db.fillStyle = 'rgba(0, 0, 0, 255)';
+	context2Db.strokeStyle = 'black';
+	context2Db.lineWidth = 1;
+	
+	context2Db.strokeText(text, 90, 30);
+	context2Db.fillText(text, 90, 30);
+
+	//setTextureFromCanvas(context2Db.canvas, textures[idx], idx);
+
+	context2Db.restore();
+
+}
+  
+
+/**
+* Loads the scene
+*/
+function load(){
+    Floor.build(10,2);
+    Scene.addObject(Floor);
+
+
+	var pos = [0,1,0];
+
+	//NOTE: assumes myId is already initialized
+    Scene.loadObject('models/geometry/texCube.json', myId, {position:pos, scale:[2,2,2], ambient:[0.4,0.4,0.4,1.0]},
+		function (object) {
+    		selectedObject = object;
+    		conn.send("addPlayer " + myId + " " + "notusedname " + pos[0] + " " + pos[1] + " " + pos[2]);
+		}
+    );
+	
+	}
+
+	function render() {
+		//off-screen rendering
+		gl.bindFramebuffer(gl.FRAMEBUFFER, picker.framebuffer);
+		gl.uniform1i(Program.uOffscreen, true);
+		draw();
+		//on-screen rendering
+		gl.uniform1i(Program.uOffscreen, showPickingImage);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		draw();
+	}
+
+	function hitProperty(ob) {
+		return ob.diffuse;
+	}
+
+	var selectedObject;
+
+	function addHit(ob) {
+		ob.previous = ob.diffuse.slice(0);
+		//console.log("previous: " + ob.previous);
+		//console.log("hit: " + ob.alias);
+		$("#spritename").text(ob.alias);
+		selectedObject = ob;
+		ob.diffuse[3] = 0.5;
+		render();
+	}
+
+	function removeHit(ob) {
+		ob.diffuse = ob.previous.slice(0);
+		render();
+
+	}
+
+	function processHits(hits) {
+		var names = '', ob;
+		for ( var i = 0; i < hits.length; i++) {
+			ob = hits[i];
+			ob.diffuse = ob.previous;
+			names += ob.alias + ' ';
+		}
+		render();
+		$('#selected-id').html('You picked : ' + names);
+	}
+
+	function movePickedObjects(hits, interactor, dx, dy) {
+
+		if (hits == 0)
+			return;
+
+		var camera = interactor.camera;
+		var depth = interactor.alt;
+		var factor = Math.max(Math.max(camera.position[0], camera.position[1]),
+				camera.position[2]) / 1000;
+		var scaleX, scaleY;
+		for ( var i = 0, max = hits.length; i < max; i += 1) {
+
+			scaleX = vec3.create();
+			scaleY = vec3.create();
+
+			if (depth) {
+				vec3.scale(camera.normal, dy * factor, scaleY);
+			} else {
+				vec3.scale(camera.up, -dy * factor, scaleY);
+				vec3.scale(camera.right, dx * factor, scaleX);
+			}
+
+			vec3.add(hits[i].position, scaleY);
+			vec3.add(hits[i].position, scaleX);
+
+		}
+		render();
+	}
+
+	var drawTimer;
+	var flagX = -9;
+	var flagY = 1;
+	var flagZ = -9;
+	//var lasttime = new Date().getTime();
+	/**
+	 * invoked on every rendering cycle
+	 */
+
+	function draw() {
+
+		//console.log("draw called z: " + flagZ);
+		//var currTime = new Date().getTime();
+		//console.log(currTime - lasttime);
+		//lasttime = currTime;
+
+		gl.viewport(0, 0, c_width, c_height);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		transforms.updatePerspective();
+		try {
+			var offscreen = Program.getUniform(Program.uOffscreen);
+
+			for ( var i = 0; i < Scene.objects.length; i++) {
+
+				var object = Scene.objects[i];
+
+				if (object.alias == 'floor' && (showPickingImage || offscreen)) {
+					continue;
+				}
+
+				if (object.diffuse[3] < 1.0 && !offscreen) {
+					gl.disable(gl.DEPTH_TEST);
+					gl.enable(gl.BLEND);
+				} else {
+					gl.enable(gl.DEPTH_TEST);
+					gl.disable(gl.BLEND);
+				}
+
+
+				if (selectedObject && object.alias == selectedObject.alias) {
+					transforms.calculateModelView();
+					transforms.push();
+					if (path.length > 0) {
+						var point = path.shift();
+
+					}
+
+					mat4.translate(transforms.mvMatrix, selectedObject.position);
+					mat4.scale(transforms.mvMatrix, object.scale);
+					transforms.setMatrixUniforms();
+
+					transforms.pop();
+				} else {
+					transforms.calculateModelView();
+					transforms.push();
+
+					if (object.alias.indexOf && object.alias.indexOf('plane') != -1) {
+						gl.uniform1i(Program.uNoLights, true);
+						
+						
+						
+						transforms.push();
+						mat4.scale(transforms.mvMatrix, object.scale);
+						mat4.translate(transforms.mvMatrix, object.position);
+
+						
+						mat4.rotate(transforms.mvMatrix, camera.azimuth / 60, [0, 1, 0]);
+						mat4.rotate(transforms.mvMatrix, camera.elevation / 60, [1, 0, 0]);
+
+						transforms.setMatrixUniforms();
+						transforms.pop();
+					}
+
+					else if (object.alias != 'floor') {
+						//console.log("##" + transforms.mvMatrix);
+						//console.log("--" + object.position);
+						mat4.translate(transforms.mvMatrix, object.position);
+						mat4.scale(transforms.mvMatrix, object.scale);
+						
+						transforms.setMatrixUniforms();
+						transforms.pop();
+					}
+					
+					else {
+						transforms.setMatrixUniforms();
+						transforms.pop();
+					}
+					
+				}
+
+				if (object.alias.indexOf && object.alias.indexOf('plane') == -1) {
+					gl.uniform1i(Program.uNoLights, false);					
+				}
+				
+				//Setting uniforms
+				gl.uniform4fv(Program.uMaterialDiffuse, object.diffuse);
+				gl.uniform4fv(Program.uMaterialAmbient, object.ambient);
+				
+				gl.uniform1i(Program.uWireframe, object.wireframe);
+				gl.uniform1i(Program.uUseVertexColor, false);
+				gl.uniform1i(Program.uUseTextures, false);
+
+				//Setting attributes
+				gl.enableVertexAttribArray(Program.aVertexPosition);
+				gl.disableVertexAttribArray(Program.aVertexNormal);
+				gl.disableVertexAttribArray(Program.aVertexColor);
+				gl.disableVertexAttribArray(Program.aVertexTextureCoords);
+
+				//Bind Array Buffer
+				gl.bindBuffer(gl.ARRAY_BUFFER, object.vbo);
+				gl.vertexAttribPointer(Program.aVertexPosition, 3, gl.FLOAT,
+						false, 0, 0);
+				gl.enableVertexAttribArray(Program.aVertexPosition);
+
+				//normal buffer
+				if (!object.wireframe) {
+					gl.bindBuffer(gl.ARRAY_BUFFER, object.nbo);
+					gl.vertexAttribPointer(Program.aVertexNormal, 3, gl.FLOAT,
+							false, 0, 0);
+					gl.enableVertexAttribArray(Program.aVertexNormal);
+				}
+
+				if (!offscreen && !showPickingImage) {
+					//render scalars
+					if (object.scalars != null) {
+						gl.enableVertexAttribArray(Program.aVertexColor);
+						gl.uniform1i(Program.uUseVertexColor, true);
+						gl.bindBuffer(gl.ARRAY_BUFFER, object.cbo);
+						gl.vertexAttribPointer(Program.aVertexColor, 4,
+								gl.FLOAT, false, 0, 0);
+					}
+
+					//render textures
+					if (object.texture_coords) {
+
+						//enable vertex attribute array in shader
+						gl
+								.enableVertexAttribArray(Program.aVertexTextureCoords);
+						gl.uniform1i(Program.uUseTextures, true);
+
+						//bind the vertex buffer to target ARRAY_BUFFER
+						gl.bindBuffer(gl.ARRAY_BUFFER, object.tbo);
+
+						//the attribute in shader will point to the bound buffer (texture vertices)
+						gl.vertexAttribPointer(Program.aVertexTextureCoords, 2,
+								gl.FLOAT, false, 0, 0);
+
+						//set active texture: "selects which texture unit subsequent texture state calls will affect"
+						gl.activeTexture(gl.TEXTURE0);
+
+						// if (object.texture) {
+						//bind the texture (image / canvas) to target TEXTURE_2D
+						//console.log("enabling the texture data: " + object.texture.tex);
+						gl.bindTexture(gl.TEXTURE_2D, object.texture.tex);
+						//}
+						//uniform uSamper - related to bound texture?
+						gl.uniform1i(Program.uSampler, 0);
+
+					}
+				} else {
+					gl.uniform1i(Program.uUseTextures, false);
+					gl.uniform1i(Program.uUseVertexColors, false);
+				}
+
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, object.ibo);
+
+				if (object.wireframe) {
+					gl.drawElements(gl.LINES, object.indices.length,
+							gl.UNSIGNED_SHORT, 0);
+				} else {
+					gl.drawElements(gl.TRIANGLES, object.indices.length,
+							gl.UNSIGNED_SHORT, 0);
+				}
+
+				gl.bindBuffer(gl.ARRAY_BUFFER, null);
+				gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, null);
+			}
+		} catch (err) {
+			//alert(err);
+			//console.error(err.description);
+			console.log(err.message);
+			console.log(err.stack);
+		}
+	}
+
+	/**
+	 * Entry point. This function is invoked when the page is loaded
+	 */
+	var app = null;
+	function runWebGLApp() {
+		initTextCanvas();
+
+		app = new WebGLApp("canvas-element-id");
+		app.configureGLHook = configure;
+		app.loadSceneHook = load;
+		app.drawSceneHook = render;
+		app.run();
+
+		//drawTimer = setTimeout("draw", 50000);
+	}
+	
+	function initTextCanvas() {
+		var canvas = $('#textCanvas2');
+		var ctx = canvas[0].getContext('2d')
+
+		var dragging = false;
+		
+		var canvasPosition = {
+		    x: canvas.offset().left,
+		    y: canvas.offset().top
+		};
+
+		canvas.mousedown(function(e) {
+			dragging = true;
+		});
+		canvas.mouseup(function(e) {
+			dragging = false;
+		});
+		
+		canvas.mousemove(function(e) {
+			if (dragging) {
+			    var mouse = {
+			        x: e.pageX - canvasPosition.x,
+			        y: e.pageY - canvasPosition.y
+			    }
+			    ctx.fillRect(mouse.x,mouse.y,2,2);
+			}
+		});
+	}
+</script>
+</head>
+
+<body>
+
+
+<div id='contents'>
+<div id='canvasContainer' style="float:left">
+<canvas id='canvas-element-id' width='480' height='400'>
+Your browser does not support the HTML5 canvas element.
+</canvas>
+</div>
+<textarea id="chatarea" rows='15' cols='70'></textarea><br/>
+<input id="chatinput" size='70' type="text"/><br/><br/>
+<canvas id='textCanvas2' width='256px' height='256px'>
+textCanvas
+</canvas>
+</div>
+
+
+
+<div id='bottom'>
+<table style='padding=0px'>
+<tr>
+    <td>
+    <table id='coloring-table'>
+
+    </table>
+    </td>
+</tr>	
+
+</table>
+</div>
+<script> 
+
+
+
+function setTextureFromCanvas(canvas, textTexture, idx) {
+   gl.activeTexture(gl.TEXTURE0 + idx);
+   gl.bindTexture(gl.TEXTURE_2D, textTexture);
+   gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+   if (isPowerOfTwo(canvas.width) && isPowerOfTwo(canvas.height)){
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+   }else{
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    } 
+   
+   gl.bindTexture(gl.TEXTURE_2D, textTexture);
+   gl.uniform1i(shaderTextureIndices[idx], idx);
+}
+
+function initTexture(obj) {
+    canvasTexture = obj.tbo;
+    obj.texture = new Texture(/* "webgl.gif" */);
+    
+    handleLoadedTexture(obj.texture.tex, document.getElementById('textCanvas2'));
+}
+
+function handleLoadedTexture(texture, textureCanvas) {
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureCanvas); // This is the important line!
+    
+	gl.bindTexture(gl.TEXTURE_2D, texture);
+	gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+	gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, textureCanvas);
+	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_NEAREST);
+    gl.generateMipmap(gl.TEXTURE_2D);
+	gl.bindTexture(gl.TEXTURE_2D, null);
+	
+}
+
+var planeIndex = 0;
+
+ $("#chatinput").keyup(function(event){
+	 
+    if(event.keyCode == 13){
+        //alert($("#chatinput").val());
+		
+        var message = $("#chatinput").val();
+
+        if (useSockets) {
+	        conn.send("chat " + myId + " " + message);
+        } else {
+			processMessage(myId, message);
+        }
+		$("#chatinput").val("");
+   }
+});
+ 
+
+
+function processMove(id, x, y, z) {
+	var object = Scene.getObject(id);
+	object.position = [x, y, z];
+}
+ 
+ 
+function processMessage(id, message) {
+	var object = Scene.getObject(id);
+	
+	if (object) {
+		var pos = [object.position[0], object.position[1], object.position[2]];
+		pos[1] += 3.5;
+//			pos[2] += 1;
+		writeTextToCanvas(message);
+		
+		Scene.loadObject('models/geometry/plane2.json', 'plane' + planeIndex++, {position: pos, scale:[1,1,1]},
+			function (object) {
+				initTexture(object);
+				
+				setTimeout(function() {
+					Scene.removeObject(object.alias);
+				}, 4000);
+	    	});
+		
+		$("#chatarea").val($("#chatarea").val() + message + "\n");
+	}
+}
+ 
+</script>
+<script>cview.run(cview.MODE_VIEW,false,470);</script>
+</body>
+</html>
